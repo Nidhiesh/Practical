@@ -1,75 +1,90 @@
+import pandas as pd 
 import numpy as np 
+import tensorflow as tf 
 import matplotlib.pyplot as plt 
-from tensorflow.keras.models import Sequential 
-from tensorflow.keras.layers import LSTM, Dense 
-from sklearn.preprocessing import MinMaxScaler 
 from sklearn.model_selection import train_test_split 
- 
-# 1. Generate Synthetic Data (100% Offline)
-np.random.seed(42) 
-time_steps = 500 
-t = np.arange(time_steps) 
-stock_prices = 50 + 0.1 * t + 10 * np.sin(0.1 * t) + np.random.normal(0, 2, time_steps) 
- 
-# Visualize the original data
-plt.plot(t, stock_prices) 
-plt.title("Synthetic Stock Prices") 
-plt.xlabel("Time") 
-plt.ylabel("Price") 
-plt.show() 
- 
+from sklearn.preprocessing import StandardScaler, LabelEncoder 
+from sklearn.metrics import classification_report 
+
+# 1. Generate Simplified Synthetic Offline Data (3 columns total)
+np.random.seed(42)
+n_samples = 1000
+
+data = {
+    "Temperature (°C)": np.random.normal(37.0, 0.5, n_samples),
+    "Heart_Rate (bpm)": np.random.normal(75, 12, n_samples),
+    "Target_Health_Status": np.random.choice(['Normal', 'Critical'], n_samples)
+}
+df = pd.DataFrame(data)
+
 # 2. Preprocess the Data
-scaler = MinMaxScaler(feature_range=(0, 1)) 
-stock_prices_scaled = scaler.fit_transform(stock_prices.reshape(-1, 1)) 
- 
-def create_dataset(data, look_back=10): 
-    X, y = [], [] 
-    for i in range(len(data) - look_back): 
-        X.append(data[i:i+look_back]) 
-        y.append(data[i+look_back]) 
-    return np.array(X), np.array(y) 
- 
-look_back = 10 
-X, y = create_dataset(stock_prices_scaled, look_back) 
- 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False) 
- 
-print("X_train shape:", X_train.shape) 
-print("y_train shape:", y_train.shape) 
- 
-# 3. Build the LSTM Model
-model = Sequential([ 
-    LSTM(128, return_sequences=True, input_shape=(look_back, 1)), 
-    LSTM(64), 
-    Dense(1) 
+feature_cols = [ 
+    "Temperature (°C)", "Heart_Rate (bpm)" 
+] 
+target_col = "Target_Health_Status" 
+
+X = df[feature_cols].values 
+y = df[target_col].values 
+
+label_encoder = LabelEncoder() 
+y_encoded = label_encoder.fit_transform(y) 
+scaler = StandardScaler() 
+X_scaled = scaler.fit_transform(X) 
+
+X_train, X_test, y_train_raw, y_test_raw = train_test_split( 
+    X_scaled, y_encoded, test_size=0.2, random_state=42 
+) 
+
+# Convert labels to categorical (one-hot encoding) for Softmax
+y_train_cat = tf.keras.utils.to_categorical(y_train_raw) 
+y_test_cat = tf.keras.utils.to_categorical(y_test_raw) 
+
+# 3. Build the ANN Model
+model = tf.keras.models.Sequential([ 
+    tf.keras.layers.Input(shape=(X_train.shape[1],)), 
+    tf.keras.layers.Dense(16, activation='relu'), 
+    tf.keras.layers.Dense(8, activation='relu'), 
+    tf.keras.layers.Dense(2, activation='softmax')  # 2 output classes
 ]) 
- 
-model.compile(optimizer='adam', loss='mse') 
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy']) 
 
 # 4. Train the Model
-history = model.fit(X_train, y_train, epochs=100, batch_size=16, verbose=1) 
+history = model.fit(X_train, y_train_cat, epochs=46, batch_size=16, validation_split=0.2, verbose=1) 
 
-# Visualize Training Loss
-plt.plot(history.history['loss'], label='Training Loss') 
-plt.title("Overfitting Demonstration: Training Loss") 
-plt.xlabel("Epoch") 
-plt.ylabel("Loss") 
-plt.legend() 
-plt.show() 
+# 5. Evaluate the Model
+loss, acc = model.evaluate(X_test, y_test_cat) 
+print(f"\nTest Accuracy: {acc:.4f}") 
 
-# 5. Evaluate and Predict
-test_loss = model.evaluate(X_test, y_test) 
-print(f"Test loss: {test_loss}") 
-
+# 6. Predictions and Classification Report
 y_pred = model.predict(X_test) 
-y_test_inv = scaler.inverse_transform(y_test) 
-y_pred_inv = scaler.inverse_transform(y_pred) 
+y_pred_classes = np.argmax(y_pred, axis=1) 
 
-# Visualize Predictions vs True Data
-plt.plot(y_test_inv, label='True Stock Price') 
-plt.plot(y_pred_inv, label='Predicted Stock Price') 
-plt.title("Stock Price Prediction on Test Set") 
-plt.xlabel("Time Step") 
-plt.ylabel("Price") 
+print("\nClassification Report:\n") 
+print(classification_report(y_test_raw, y_pred_classes, target_names=label_encoder.classes_)) 
+
+# 7. Plotting Accuracy and Loss
+plt.figure(figsize=(12, 5))
+
+# Accuracy Plot
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Train Accuracy') 
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy') 
+plt.xlabel('Epoch') 
+plt.ylabel('Accuracy') 
+plt.title('Model Accuracy') 
 plt.legend() 
+plt.grid(True) 
+
+# Loss Plot
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Train Loss') 
+plt.plot(history.history['val_loss'], label='Validation Loss') 
+plt.xlabel('Epoch') 
+plt.ylabel('Loss') 
+plt.title('Model Loss') 
+plt.legend() 
+plt.grid(True) 
+
+plt.tight_layout()
 plt.show()
