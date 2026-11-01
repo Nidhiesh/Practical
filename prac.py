@@ -1,90 +1,83 @@
-import pandas as pd 
 import numpy as np 
 import tensorflow as tf 
 import matplotlib.pyplot as plt 
-from sklearn.model_selection import train_test_split 
-from sklearn.preprocessing import StandardScaler, LabelEncoder 
-from sklearn.metrics import classification_report 
+from sklearn.model_selection import train_test_split as tts
+from sklearn.preprocessing import LabelEncoder 
 
-# 1. Generate Simplified Synthetic Offline Data (3 columns total)
+print("Generating synthetic offline MFCC features...")
+
+# 1. Generate Synthetic Audio Features (Bypasses GitHub download and librosa)
 np.random.seed(42)
-n_samples = 1000
+num_samples = 1000
+num_features = 40  # Represents 40 MFCC features from an audio file
+num_classes = 10   # Representing spoken digits 0 through 9
 
-data = {
-    "Temperature (°C)": np.random.normal(37.0, 0.5, n_samples),
-    "Heart_Rate (bpm)": np.random.normal(75, 12, n_samples),
-    "Target_Health_Status": np.random.choice(['Normal', 'Critical'], n_samples)
-}
-df = pd.DataFrame(data)
+X = np.zeros((num_samples, num_features))
+y = np.random.randint(0, num_classes, num_samples)
+
+# Adding a mathematical pattern based on the label so the ANN can actually learn
+for i in range(num_samples):
+    X[i] = np.random.normal(loc=y[i]*0.2, scale=1.0, size=num_features)
+
+X = np.array(X) 
+y = np.array(y) 
+print(f"Feature extraction complete! Shape: {X.shape}") 
 
 # 2. Preprocess the Data
-feature_cols = [ 
-    "Temperature (°C)", "Heart_Rate (bpm)" 
-] 
-target_col = "Target_Health_Status" 
+le = LabelEncoder() 
+y_encoded = le.fit_transform(y) 
 
-X = df[feature_cols].values 
-y = df[target_col].values 
-
-label_encoder = LabelEncoder() 
-y_encoded = label_encoder.fit_transform(y) 
-scaler = StandardScaler() 
-X_scaled = scaler.fit_transform(X) 
-
-X_train, X_test, y_train_raw, y_test_raw = train_test_split( 
-    X_scaled, y_encoded, test_size=0.2, random_state=42 
+X_train, X_test, y_train, y_test = tts(
+    X, y_encoded, test_size=0.2, random_state=42 
 ) 
-
-# Convert labels to categorical (one-hot encoding) for Softmax
-y_train_cat = tf.keras.utils.to_categorical(y_train_raw) 
-y_test_cat = tf.keras.utils.to_categorical(y_test_raw) 
+print(f"Data split: Train = {len(X_train)} , Test = {len(X_test)}") 
 
 # 3. Build the ANN Model
 model = tf.keras.models.Sequential([ 
-    tf.keras.layers.Input(shape=(X_train.shape[1],)), 
-    tf.keras.layers.Dense(16, activation='relu'), 
-    tf.keras.layers.Dense(8, activation='relu'), 
-    tf.keras.layers.Dense(2, activation='softmax')  # 2 output classes
+    tf.keras.layers.Dense(256, activation='relu', input_shape=(40,)), 
+    tf.keras.layers.Dropout(0.3), 
+    tf.keras.layers.Dense(128, activation='relu'), 
+    tf.keras.layers.Dropout(0.3), 
+    tf.keras.layers.Dense(10, activation='softmax') 
 ]) 
 
-model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy']) 
+model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy']) 
+model.summary() 
 
 # 4. Train the Model
-history = model.fit(X_train, y_train_cat, epochs=46, batch_size=16, validation_split=0.2, verbose=1) 
+print("Training the model...") 
+history = model.fit(X_train, y_train, epochs=40, batch_size=16, validation_data=(X_test, y_test), verbose=1) 
 
-# 5. Evaluate the Model
-loss, acc = model.evaluate(X_test, y_test_cat) 
-print(f"\nTest Accuracy: {acc:.4f}") 
+# 5. Evaluate
+test_loss, test_acc = model.evaluate(X_test, y_test) 
+print(f"\nTest Accuracy: {test_acc * 100:.2f}%\n") 
 
-# 6. Predictions and Classification Report
-y_pred = model.predict(X_test) 
-y_pred_classes = np.argmax(y_pred, axis=1) 
+# 6. Plotting
+plt.figure(figsize=(10,4)) 
 
-print("\nClassification Report:\n") 
-print(classification_report(y_test_raw, y_pred_classes, target_names=label_encoder.classes_)) 
-
-# 7. Plotting Accuracy and Loss
-plt.figure(figsize=(12, 5))
-
-# Accuracy Plot
-plt.subplot(1, 2, 1)
-plt.plot(history.history['accuracy'], label='Train Accuracy') 
-plt.plot(history.history['val_accuracy'], label='Validation Accuracy') 
-plt.xlabel('Epoch') 
-plt.ylabel('Accuracy') 
+plt.subplot(1,2,1) 
+plt.plot(history.history['accuracy'], label='Train Acc') 
+plt.plot(history.history['val_accuracy'], label='Val Acc') 
+plt.legend() 
 plt.title('Model Accuracy') 
-plt.legend() 
-plt.grid(True) 
 
-# Loss Plot
-plt.subplot(1, 2, 2)
+plt.subplot(1,2,2) 
 plt.plot(history.history['loss'], label='Train Loss') 
-plt.plot(history.history['val_loss'], label='Validation Loss') 
-plt.xlabel('Epoch') 
-plt.ylabel('Loss') 
-plt.title('Model Loss') 
+plt.plot(history.history['val_loss'], label='Val Loss') 
 plt.legend() 
-plt.grid(True) 
+plt.title('Model Loss') 
 
 plt.tight_layout()
-plt.show()
+plt.show() 
+
+# 7. Predict on a simulated new audio file
+def predict_audio(synthetic_feature): 
+    feature = np.expand_dims(synthetic_feature, axis=0) 
+    pred = model.predict(feature) 
+    predicted_label = le.inverse_transform([np.argmax(pred)]) 
+    print(f"🎤 Predicted Digit: {predicted_label[0]}") 
+
+print("Simulating prediction on a new audio file...")
+# Grab one sample from our test set to act as the "new" audio file
+sample_feature = X_test[0]
+predict_audio(sample_feature)
