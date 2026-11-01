@@ -1,93 +1,87 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import layers, models
 import matplotlib.pyplot as plt
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Input
+from sklearn.model_selection import train_test_split
 
-# ==========================================
-# STEP 1: GENERATE SYNTHETIC CARTOON DATA (OFFLINE)
-# ==========================================
-# Creating 1000 simple 28x28 grayscale "faces" so it runs without internet
+# 1. Generate Synthetic Audio Data (100% Offline)
+# Simulating 1000 audio frames, each containing 100 sequential features
 num_samples = 1000
-img_size = 28
-X_train = np.zeros((num_samples, img_size, img_size, 1), dtype=np.float32)
+feature_dim = 100
 
-for i in range(num_samples):
-    # Draw a simple face pattern (left eye, right eye, and mouth)
-    X_train[i, 8:12, 8:12, 0] = 1.0   # Left eye
-    X_train[i, 8:12, 16:20, 0] = 1.0  # Right eye
-    X_train[i, 20:22, 10:18, 0] = 1.0 # Mouth
-    # Add slight random noise so the GAN has to learn variations
-    X_train[i] += np.random.uniform(0, 0.1, (img_size, img_size, 1))
+# Generate Clean "Audio" (Smooth sine waves representing clear voice frequencies)
+x_axis = np.linspace(0, 10, feature_dim)
+clean_audio = np.array([np.sin(x_axis + i) for i in range(num_samples)])
 
-X_train = np.clip(X_train, 0, 1)
+# Generate Noisy "Audio" (Adding random static to the clean audio)
+noise_factor = 0.5
+noisy_audio = clean_audio + noise_factor * np.random.normal(loc=0.0, scale=1.0, size=clean_audio.shape)
+noisy_audio = np.clip(noisy_audio, -1.0, 1.0) 
 
-# ==========================================
-# STEP 2: BUILD GENERATOR & DISCRIMINATOR
-# ==========================================
-latent_dim = 50
+# Split into training and testing sets
+X_train_noisy, X_test_noisy, y_train_clean, y_test_clean = train_test_split(
+    noisy_audio, clean_audio, test_size=0.2, random_state=42
+)
 
-# Generator: Takes random noise and creates an image
-generator = models.Sequential([
-    layers.Dense(128, activation='relu', input_shape=(latent_dim,)),
-    layers.Dense(img_size * img_size, activation='sigmoid'),
-    layers.Reshape((img_size, img_size, 1))
+# 2 & 3. Build the Autoencoder (Encoder + Decoder)
+model = Sequential([
+    Input(shape=(feature_dim,)),
+    
+    # Encoder: Compresses the audio signal to find the core patterns
+    Dense(64, activation='relu'),
+    Dense(32, activation='relu'), 
+    
+    # Decoder: Reconstructs the audio signal while leaving the random noise behind
+    Dense(64, activation='relu'),
+    Dense(feature_dim, activation='linear') 
 ])
 
-# Discriminator: Takes an image and guesses Real (1) or Fake (0)
-discriminator = models.Sequential([
-    layers.Flatten(input_shape=(img_size, img_size, 1)),
-    layers.Dense(128, activation='relu'),
-    layers.Dense(1, activation='sigmoid') 
-])
+# 4. Compile the Model (Using Mean Squared Error for regression/reconstruction)
+model.compile(optimizer='adam', loss='mse')
+
+# 5. Train the Model (Teach it to map Noisy input -> Clean target)
+print("Training Audio Autoencoder...")
+history = model.fit(
+    X_train_noisy, y_train_clean, 
+    validation_data=(X_test_noisy, y_test_clean), 
+    epochs=20, 
+    batch_size=32, 
+    verbose=1
+)
+
+# 6. Evaluate
+test_loss = model.evaluate(X_test_noisy, y_test_clean, verbose=0)
+print(f"\nTest MSE Loss: {test_loss:.4f}\n")
+
+# 7. Reconstruct/Output the denoised audio
+denoised_audio = model.predict(X_test_noisy)
 
 # ==========================================
-# STEP 3: COMPILE MODELS
+# VISUALIZATION (Simple Sequential Plotting)
 # ==========================================
-discriminator.compile(optimizer='adam', loss='binary_crossentropy')
 
-# Create combined GAN model (Generator + Discriminator)
-discriminator.trainable = False # Freeze discriminator while training the generator
-gan = models.Sequential([generator, discriminator])
-gan.compile(optimizer='adam', loss='binary_crossentropy')
+# Plot Loss Curve
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Val Loss')
+plt.title('Autoencoder Training Loss')
+plt.legend()
+plt.show()
 
-# ==========================================
-# STEP 4 & 6: TRAIN BOTH NETWORKS ALTERNATELY
-# ==========================================
-epochs = 50
-batch_size = 32
+# Plot 1: The original clean signal
+plt.plot(y_test_clean[0], label='Clean Signal', color='green')
+plt.title("Original Clean Audio")
+plt.legend()
+plt.show()
 
-print("Training GAN... This will take a few seconds.")
-for epoch in range(epochs):
-    
-    # --- 1. Train Discriminator ---
-    noise = np.random.normal(0, 1, (batch_size, latent_dim))
-    fake_imgs = generator.predict(noise, verbose=0)
-    
-    idx = np.random.randint(0, X_train.shape[0], batch_size)
-    real_imgs = X_train[idx]
-    
-    # Train discriminator on real images (target=1) and fake images (target=0)
-    d_loss_real = discriminator.train_on_batch(real_imgs, np.ones((batch_size, 1)))
-    d_loss_fake = discriminator.train_on_batch(fake_imgs, np.zeros((batch_size, 1)))
-    
-    # --- 2. Train Generator ---
-    noise = np.random.normal(0, 1, (batch_size, latent_dim))
-    
-    # We want the generator to fool the discriminator, so we tell it the target is 1 (Real)
-    g_loss = gan.train_on_batch(noise, np.ones((batch_size, 1))) 
+# Plot 2: The signal corrupted by static noise
+plt.plot(X_test_noisy[0], label='Noisy Input', color='red')
+plt.title("Audio with Background Noise")
+plt.legend()
+plt.show()
 
-# ==========================================
-# STEP 5 & 7: EVALUATE & DISPLAY GENERATED IMAGES
-# ==========================================
-print("Generating new cartoon faces...")
-test_noise = np.random.normal(0, 1, (5, latent_dim))
-generated_images = generator.predict(test_noise, verbose=0)
-
-# Simple Matplotlib plotting
-fig, axes = plt.subplots(1, 5, figsize=(10, 2))
-for i in range(5):
-    axes[i].imshow(generated_images[i, :, :, 0], cmap='gray')
-    axes[i].axis('off')
-    
-plt.suptitle("Generated Cartoon Faces")
+# Plot 3: The model's attempt to clean the noise
+plt.plot(denoised_audio[0], label='Denoised Output', color='blue')
+plt.title("Autoencoder Denoised Output")
+plt.legend()
 plt.show()
