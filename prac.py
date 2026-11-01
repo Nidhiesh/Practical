@@ -1,83 +1,69 @@
 import numpy as np 
 import tensorflow as tf 
 import matplotlib.pyplot as plt 
-from sklearn.model_selection import train_test_split as tts
-from sklearn.preprocessing import LabelEncoder 
+import matplotlib.patches as patches
 
-print("Generating synthetic offline MFCC features...")
+# ==========================================
+# STEP 1 & 2: GENERATE & PREPROCESS DATA (OFFLINE)
+# ==========================================
+num_samples = 500
+img_size = 64
+X = np.zeros((num_samples, img_size, img_size, 1), dtype=np.float32)
+y_boxes = np.zeros((num_samples, 4), dtype=np.float32) # Target: [x, y, width, height]
 
-# 1. Generate Synthetic Audio Features (Bypasses GitHub download and librosa)
-np.random.seed(42)
-num_samples = 1000
-num_features = 40  # Represents 40 MFCC features from an audio file
-num_classes = 10   # Representing spoken digits 0 through 9
-
-X = np.zeros((num_samples, num_features))
-y = np.random.randint(0, num_classes, num_samples)
-
-# Adding a mathematical pattern based on the label so the ANN can actually learn
 for i in range(num_samples):
-    X[i] = np.random.normal(loc=y[i]*0.2, scale=1.0, size=num_features)
+    # Create a random "car" (a white box on a dark background)
+    w, h = np.random.randint(10, 20, 2)
+    x, y = np.random.randint(10, img_size - 20, 2)
+    
+    # Draw the car onto the image matrix
+    X[i, y:y+h, x:x+w, 0] = 1.0 
+    
+    # Save the normalized box coordinates (between 0 and 1) for the model to learn
+    y_boxes[i] = [x / img_size, y / img_size, w / img_size, h / img_size]
 
-X = np.array(X) 
-y = np.array(y) 
-print(f"Feature extraction complete! Shape: {X.shape}") 
+# Split into training and testing sets
+split = 400
+X_train, X_test = X[:split], X[split:]
+y_train, y_test = y_boxes[:split], y_boxes[split:]
 
-# 2. Preprocess the Data
-le = LabelEncoder() 
-y_encoded = le.fit_transform(y) 
+# ==========================================
+# STEP 3: BUILD THE DNN (CNN)
+# ==========================================
+model = tf.keras.models.Sequential([
+    tf.keras.layers.Input(shape=(img_size, img_size, 1)),
+    tf.keras.layers.Conv2D(16, (3,3), activation='relu'),
+    tf.keras.layers.MaxPooling2D((2,2)),
+    tf.keras.layers.Flatten(),
+    
+    # Output Layer: 4 neurons to predict Bounding Box coordinates [x, y, w, h]
+    tf.keras.layers.Dense(4, activation='sigmoid') 
+])
 
-X_train, X_test, y_train, y_test = tts(
-    X, y_encoded, test_size=0.2, random_state=42 
-) 
-print(f"Data split: Train = {len(X_train)} , Test = {len(X_test)}") 
+# ==========================================
+# STEP 4 & 5: COMPILE AND TRAIN
+# ==========================================
+model.compile(optimizer='adam', loss='mse')
+print("Training Simple Object Detection Model...")
+model.fit(X_train, y_train, epochs=15, batch_size=16, verbose=1)
 
-# 3. Build the ANN Model
-model = tf.keras.models.Sequential([ 
-    tf.keras.layers.Dense(256, activation='relu', input_shape=(40,)), 
-    tf.keras.layers.Dropout(0.3), 
-    tf.keras.layers.Dense(128, activation='relu'), 
-    tf.keras.layers.Dropout(0.3), 
-    tf.keras.layers.Dense(10, activation='softmax') 
-]) 
+# ==========================================
+# STEP 6 & 7: TEST AND DISPLAY BOUNDING BOX
+# ==========================================
+test_img = X_test[0]
+pred_box = model.predict(test_img.reshape(1, img_size, img_size, 1))[0]
 
-model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy']) 
-model.summary() 
+# Convert the predicted coordinates (0 to 1) back to actual pixel sizes (0 to 64)
+x, y, w, h = pred_box * img_size
 
-# 4. Train the Model
-print("Training the model...") 
-history = model.fit(X_train, y_train, epochs=40, batch_size=16, validation_data=(X_test, y_test), verbose=1) 
+# Draw the image and the bounding box using Matplotlib
+fig, ax = plt.subplots(1)
+ax.imshow(test_img[:, :, 0], cmap='gray')
 
-# 5. Evaluate
-test_loss, test_acc = model.evaluate(X_test, y_test) 
-print(f"\nTest Accuracy: {test_acc * 100:.2f}%\n") 
+# Create a red rectangle patch 
+rect = patches.Rectangle((x, y), w, h, linewidth=2, edgecolor='red', facecolor='none')
+ax.add_patch(rect)
 
-# 6. Plotting
-plt.figure(figsize=(10,4)) 
-
-plt.subplot(1,2,1) 
-plt.plot(history.history['accuracy'], label='Train Acc') 
-plt.plot(history.history['val_accuracy'], label='Val Acc') 
-plt.legend() 
-plt.title('Model Accuracy') 
-
-plt.subplot(1,2,2) 
-plt.plot(history.history['loss'], label='Train Loss') 
-plt.plot(history.history['val_loss'], label='Val Loss') 
-plt.legend() 
-plt.title('Model Loss') 
-
-plt.tight_layout()
-plt.show() 
-
-# 7. Predict on a simulated new audio file
-def predict_audio(synthetic_feature): 
-    feature = np.expand_dims(synthetic_feature, axis=0) 
-    pred = model.predict(feature) 
-    predicted_label = le.inverse_transform([np.argmax(pred)]) 
-    print(f"🎤 Predicted Digit: {predicted_label[0]}") 
-
-print("Simulating prediction on a new audio file...")
-# Grab one sample from our test set to act as the "new" audio file
-sample_feature = X_test[0]
-predict_audio(sample_feature)
+plt.title("Traffic Object Detected")
+plt.axis('off')
+plt.show()
