@@ -1,75 +1,66 @@
 import numpy as np 
+import pandas as pd 
 import tensorflow as tf 
-import matplotlib.pyplot as plt 
+from tensorflow.keras.models import Sequential 
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input 
 from sklearn.model_selection import train_test_split 
+from sklearn.preprocessing import StandardScaler 
+from sklearn.datasets import make_classification 
+from sklearn.metrics import classification_report, roc_auc_score, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt 
 
-print("Generating synthetic offline leaf images...")
+# 1. Generate Synthetic Share Market Data (100% Offline)
+# Simulating 'price' and 'volume' where some transactions are normal (0) and some are fraudulent (1)
+X, y = make_classification(n_samples=1000, n_features=2, n_informative=2, n_redundant=0, random_state=42) 
 
-# 1. Generate Synthetic Leaf Data (Offline)
-# 0 = Healthy Leaf, 1 = Diseased Leaf
-num_samples = 400
-img_size = 64
-X = np.zeros((num_samples, img_size, img_size, 3), dtype=np.float32)
-y = np.random.randint(0, 2, num_samples)
-class_names = ["Healthy", "Diseased"]
+# 2. Preprocess Data
+scaler = StandardScaler() 
+X_scaled = scaler.fit_transform(X) 
 
-for i in range(num_samples):
-    # Create a base green "leaf" (higher values in the green channel)
-    X[i, :, :, 1] = np.random.uniform(0.5, 0.8) # Green
-    X[i, :, :, 0] = np.random.uniform(0.1, 0.3) # Red
-    X[i, :, :, 2] = np.random.uniform(0.1, 0.3) # Blue
-    
-    if y[i] == 1: 
-        # If diseased, simulate infection by drawing random brown/black spots
-        num_spots = np.random.randint(3, 8)
-        for _ in range(num_spots):
-            sx, sy = np.random.randint(5, img_size-5, 2)
-            X[i, sx:sx+4, sy:sy+4, 0] = 0.6  # Brownish-red
-            X[i, sx:sx+4, sy:sy+4, 1] = 0.3
-            X[i, sx:sx+4, sy:sy+4, 2] = 0.1
+# LSTMs require 3D input: (samples, time_steps, features). Here time_steps=1, features=2
+X_scaled = X_scaled.reshape((X_scaled.shape[0], 1, 2)) 
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42, stratify=y) 
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# 3. Build the LSTM Model for Fraud Detection
+model = Sequential([ 
+    Input(shape=(1, 2)), 
+    LSTM(32, return_sequences=False), 
+    Dropout(0.3), 
+    Dense(16, activation="relu"), 
+    Dense(1, activation="sigmoid") # Sigmoid outputs probability of Fraud (0 to 1)
+]) 
 
-# 2. Build a Custom CNN from Scratch
-# This completely replaces the heavy MobileNetV2 architecture
-model = tf.keras.models.Sequential([
-    tf.keras.layers.Input(shape=(img_size, img_size, 3)),
-    tf.keras.layers.Conv2D(16, (3,3), activation='relu'),
-    tf.keras.layers.MaxPooling2D(2,2),
-    tf.keras.layers.Conv2D(32, (3,3), activation='relu'),
-    tf.keras.layers.MaxPooling2D(2,2),
-    tf.keras.layers.Flatten(),
-    tf.keras.layers.Dense(64, activation='relu'),
-    tf.keras.layers.Dropout(0.3),
-    tf.keras.layers.Dense(2, activation='softmax') # 2 classes: Healthy vs Diseased
-])
+# 4. Compile the Model
+model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"]) 
 
-model.compile(optimizer='adam', 
-              loss='sparse_categorical_crossentropy', 
-              metrics=['accuracy'])
+# 5. Train the Model
+history = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=12, batch_size=32, verbose=1) 
 
-# 3. Train the CNN
-print("Training Custom CNN for Leaf Disease Detection...")
-history = model.fit(X_train, y_train, epochs=10, batch_size=16, validation_data=(X_test, y_test), verbose=1)
+# 6. Evaluate
+loss, acc = model.evaluate(X_test, y_test, verbose=0) 
+print(f"\nTest accuracy: {acc:.4f}\n") 
 
-# 4. Evaluate
-loss, acc = model.evaluate(X_test, y_test)
-print(f"\nTest Accuracy: {acc:.4f}\n")
+y_pred = (model.predict(X_test) > 0.5).astype("int32") 
+print(classification_report(y_test, y_pred)) 
+print("ROC AUC:", roc_auc_score(y_test, y_pred))
 
-# 5. Visualize Predictions on 5 sample images
-preds = model.predict(X_test[:5])
+# 7. Visualize (Normal & Simple Plotting)
 
-plt.figure(figsize=(12, 4))
-for i in range(5):
-    plt.subplot(1, 5, i+1)
-    plt.imshow(X_test[i])
-    
-    pred_class = class_names[np.argmax(preds[i])]
-    true_class = class_names[y_test[i]]
-    color = "green" if pred_class == true_class else "red"
-    
-    plt.title(f"Pred: {pred_class}\nTrue: {true_class}", color=color, fontsize=10)
-    plt.axis("off")
+# Show Accuracy Graph
+plt.plot(history.history["accuracy"], label="Train Acc")
+plt.plot(history.history["val_accuracy"], label="Val Acc")
+plt.title("Model Accuracy")
+plt.legend()
+plt.show()
 
-plt.tight_layout()
+# Show Loss Graph
+plt.plot(history.history["loss"], label="Train Loss")
+plt.plot(history.history["val_loss"], label="Val Loss")
+plt.title("Model Loss")
+plt.legend()
+plt.show()
+
+# Show Confusion Matrix (No Seaborn required)
+ConfusionMatrixDisplay.from_predictions(y_test, y_pred, cmap="Blues")
+plt.title("Fraud Detection Confusion Matrix")
 plt.show()
